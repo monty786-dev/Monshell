@@ -1,0 +1,61 @@
+name: Build setup.exe
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ x86_64, i686 ]      # x86_64 = 64-bit Wine container, i686 = 32-bit container
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 binutils-mingw-w64-x86-64 binutils-mingw-w64-i686
+
+      - name: Compile MontyShell.exe
+        run: |
+          mkdir -p build
+          ${{ matrix.arch }}-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wno-unused-function -Wno-unused-variable \
+            -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 \
+            src/*.c -o build/MontyShell-${{ matrix.arch }}.exe \
+            -mwindows -s -static \
+            -lgdi32 -luser32 -lmsimg32 -lcomdlg32 -lshell32 -lole32 -luuid -liphlpapi -lws2_32 -ladvapi32
+
+      - name: Build setup.exe (embeds MontyShell.exe)
+        continue-on-error: true      # the plain exe above is still uploaded if this step fails
+        run: |
+          echo '1 RCDATA "build/MontyShell-${{ matrix.arch }}.exe"' > build/res.rc
+          ${{ matrix.arch }}-w64-mingw32-windres build/res.rc -O coff -o build/res.o
+          ${{ matrix.arch }}-w64-mingw32-gcc -std=gnu11 -O2 -Wall -Wno-unused-function -Wno-unused-variable \
+            -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 \
+            installer/setup.c src/draw.c src/themes.c src/settings.c build/res.o \
+            -o build/MontyShell-Setup-${{ matrix.arch }}.exe \
+            -mwindows -s -static \
+            -lgdi32 -luser32 -lmsimg32 -lcomdlg32 -lshell32 -lole32 -luuid -liphlpapi -lws2_32 -ladvapi32
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MontyShell-${{ matrix.arch }}
+          path: |
+            build/MontyShell-${{ matrix.arch }}.exe
+            build/MontyShell-Setup-${{ matrix.arch }}.exe
+          if-no-files-found: warn
+
+      - name: Attach to Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/MontyShell-Setup-${{ matrix.arch }}.exe
